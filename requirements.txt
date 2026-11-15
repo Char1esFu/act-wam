@@ -1,0 +1,16 @@
+# Python 3.10+; install torch/torchvision for your CUDA first, e.g.
+#   uv pip install --torch-backend=cu128 torch torchvision
+torch
+torchvision
+h5py
+numpy
+opencv-python-headless
+scipy
+transforms3d
+pyyaml
+tqdm
+matplotlib
+einops
+ipython
+tensorboard
+wandb

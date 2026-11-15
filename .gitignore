@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+# ACT episodes written by process_data.py, and the dataset list it maintains
+data
+data/
+SIM_TASK_CONFIGS.json
+# checkpoints and logs
+act_ckpt/
+checkpoints/*.pth
+wandb/
+*.out
