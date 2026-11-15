@@ -14,5 +14,5 @@ export CUDA_VISIBLE_DEVICES=${gpu_id}
 python3 imitate_episodes.py \
     --task_name sim-${task_name}-${task_config}-${expert_data_num} \
     --ckpt_dir ./act_ckpt/act-${task_name}/${task_config}-${expert_data_num}/${train_config} \
-    --config_path ./${train_config}.yml \
+    --config_path ./configs/${train_config}.yml \
     --seed ${seed}

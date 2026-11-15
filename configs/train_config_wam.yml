@@ -30,7 +30,6 @@ pre_norm: false
 dropout: 0.1
 camera_names:
   - cam_high
-  - cam_wrist
 
 # tactile args
 tactile_names:
@@ -48,7 +47,7 @@ tactile_dilation: false
 # World action model (ACT + future tactile latent prediction). One extra decoder query per
 # (future frame, tactile stream) regresses the UniVTAC latent of that frame (L1, layer-normalized),
 # from an EMA copy of the fine-tuned tactile backbone. The action queries attend to these queries
-# through the decoder self-attention. Everything else equals train_config_all.yml, except num_steps.
+# through the decoder self-attention. Everything else equals train_config.yml, except the extra keys.
 wam_enabled: true
 wam_tactile_future_stride: 5   # dataset frames between predicted frames
 wam_tactile_future_steps: 6    # t+5 ... t+30

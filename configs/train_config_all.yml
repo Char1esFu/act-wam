@@ -1,17 +1,17 @@
 # ACT-specific arguments
 state_dim: 8
 kl_weight: 10.0
-chunk_size: 50 
+chunk_size: 50
 hidden_dim: 512
 dim_feedforward: 3200
 
-temporal_agg: true 
+temporal_agg: true
 device: cuda:0
 
 # DETR parser args
 ckpt_dir: null
 policy_class: ACT
-num_steps: 4000
+num_steps: 20000
 
 # Model training params
 batch_size: 64
@@ -33,8 +33,10 @@ camera_names:
   - cam_wrist
 
 # tactile args
-tactile_names: []
-lr_tactile_backbone: 0.0
+tactile_names:
+  - tac_left
+  - tac_right
+lr_tactile_backbone: 0.00001
 tactile_masks: false
 tactile_backbone: resnet18
 # UniVTAC pretrained tactile ResNet18 (encoder/checkpoints/resnet18/20251128-125750/best.pth of UniVTAC),

@@ -1,7 +1,7 @@
 #!/bin/bash -l
 # Convert the data (if needed) and train ACT on one NHR alex A40.
 #   sbatch --export=NONE,TRAIN_CONFIG=train_config_wam train_cluster.sbatch put_bottle_in_shelf
-# TRAIN_CONFIG names <TRAIN_CONFIG>.yml, e.g. train_config_wam / train_config_all_wam (ACT + future tactile
+# TRAIN_CONFIG names configs/<TRAIN_CONFIG>.yml, e.g. train_config_wam / train_config_all_wam (ACT + future tactile
 # latent prediction; head camera / head + wrist cameras) or train_config / train_config_all (plain ACT).
 # The data is exported with the cameras of task_settings.json, plus the wrist camera when the config uses it.
 #
@@ -54,7 +54,7 @@ echo "[act] task=$TASK_NAME config=$TRAIN_CONFIG ckpt=$CKPT_DIR git=$(git rev-pa
     flock 9
     META=data/sim-${TASK_NAME}/${TASK_CONFIG}-${EXPERT_DATA_NUM}/metadata.json
     CAMERAS=()
-    if grep -qE "^\s*-\s*cam_wrist\s*$" "${TRAIN_CONFIG}.yml"; then CAMERAS=(--visual-cameras head wrist); fi
+    if grep -qE "^\s*-\s*cam_wrist\s*$" "configs/${TRAIN_CONFIG}.yml"; then CAMERAS=(--visual-cameras head wrist); fi
     if python3 -c "import json,sys; sys.exit(0 if '$SETTINGS' in json.load(open('SIM_TASK_CONFIGS.json')) else 1)" 2>/dev/null \
         && [ -f "$META" ] && { [ ${#CAMERAS[@]} -eq 0 ] || grep -q cam_wrist "$META"; }; then
         echo "[act] dataset exists"
@@ -69,4 +69,4 @@ if [ -f "$CKPT_DIR/policy_last.ckpt" ]; then
 fi
 mkdir -p "$CKPT_DIR"
 "$PY" imitate_episodes.py --task_name "$SETTINGS" --ckpt_dir "$CKPT_DIR" \
-    --config_path "./${TRAIN_CONFIG}.yml" --seed "$SEED"
+    --config_path "./configs/${TRAIN_CONFIG}.yml" --seed "$SEED"

@@ -51,15 +51,14 @@ configs need.
 
 ## Train
 
-Run from the repo root. `<config>.yml` holds every hyperparameter:
+Run from the repo root. `configs/<train_config>.yml` holds every hyperparameter:
 
 | Config | Cameras | Tactile | Steps |
 |---|---|---|---|
-| `train_config` | head | UniVTAC encoder, fine-tuned | 4000 |
-| `train_config_all` | head + wrist | UniVTAC encoder, fine-tuned | 4000 |
+| `train_config` | head | UniVTAC encoder, fine-tuned | 20000 |
+| `train_config_all` | head + wrist | UniVTAC encoder, fine-tuned | 20000 |
 | `train_config_wam` | head | same, + future tactile latent prediction | 20000 |
 | `train_config_all_wam` | head + wrist | same, + future tactile latent prediction | 20000 |
-| `train_config_freeze`, `_scrach`, `_tactile_full`, `_vision`, `_vision_all` | | UniVTAC ablations | 4000 |
 
 ```bash
 bash train.sh put_bottle_in_shelf clean 100 0 0 train_config_wam   # task config num seed gpu train_config
@@ -85,7 +84,7 @@ sbatch --export=NONE,TRAIN_CONFIG=train_config_wam train_cluster.sbatch put_bott
 
 Copy (or link) the checkpoint directory to `policy/ACT/act_ckpt/act-<task>/<config>-<num>/<train_config>/`
 of UniVTAC and run its ACT deploy with `TRAIN_CONFIG=<train_config>`. The deploy builds the model from the
-same `<train_config>.yml`, so the WAM keys must be in its copy too.
+same `<train_config>.yml` (copy it from `configs/`), so the WAM keys must be in its copy too.
 
 ## License
 
