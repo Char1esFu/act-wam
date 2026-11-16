@@ -83,7 +83,8 @@ sbatch --export=NONE,TRAIN_CONFIG=train_config_wam train_cluster.sbatch put_bott
 ## Evaluate
 
 Copy (or link) the checkpoint directory to `policy/ACT/act_ckpt/act-<task>/<config>-<num>/<train_config>/`
-of UniVTAC and run its ACT deploy with `TRAIN_CONFIG=<train_config>`. The deploy builds the model from the
+of UniVTAC and run its ACT deploy with `TRAIN_CONFIG=<train_config>`, after putting the files of
+`univtac_eval/` over UniVTAC's `policy/ACT` (see `univtac_eval/README.md`). The deploy builds the model from the
 same `<train_config>.yml` (copy it from `configs/`), so the WAM keys must be in its copy too.
 
 ## License

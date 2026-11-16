@@ -1,0 +1,197 @@
+diff --git a/policy/ACT/act_policy.py b/policy/ACT/act_policy.py
+index 2485ec7..69481c7 100755
+--- a/policy/ACT/act_policy.py
++++ b/policy/ACT/act_policy.py
+@@ -29,14 +29,16 @@ class ACTPolicy(nn.Module):
+         self.optimizer = optimizer
+         self.kl_weight = args_override["kl_weight"]
+         print(f"KL Weight {self.kl_weight}")
++        self.wam_tactile_loss_weight = args_override.get("wam_tactile_loss_weight", 1.0)
++        self.wam_tactile_ema_decay = args_override.get("wam_tactile_ema_decay", 0.999)
+ 
+-    def __call__(self, qpos, cam_image, tac_image, actions=None, is_pad=None):
++    def __call__(self, qpos, cam_image, tac_image, actions=None, is_pad=None, tac_future=None, tac_future_valid=None):
+         env_state = None
+         if actions is not None:  # training time
+             actions = actions[:, :self.model.num_queries]
+             is_pad = is_pad[:, :self.model.num_queries]
+ 
+-            a_hat, is_pad_hat, (mu, logvar) = self.model(qpos, cam_image, tac_image, env_state, actions, is_pad)
++            a_hat, is_pad_hat, (mu, logvar), tac_hat = self.model(qpos, cam_image, tac_image, env_state, actions, is_pad)
+             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
+             loss_dict = dict()
+             all_l1 = F.l1_loss(actions, a_hat, reduction="none")
+@@ -44,11 +46,22 @@ class ACTPolicy(nn.Module):
+             loss_dict["l1"] = l1
+             loss_dict["kl"] = total_kld[0]
+             loss_dict["loss"] = loss_dict["l1"] + loss_dict["kl"] * self.kl_weight
++            if tac_hat is not None:
++                # L1 to the EMA latents of the future tactile frames; frames past the episode end are left out.
++                target = self.model.wam_tactile_targets(tac_future)
++                per_frame = F.l1_loss(tac_hat, target, reduction="none").mean(dim=(2, 3))  # (bs, frames)
++                valid = tac_future_valid.float()
++                loss_dict["tactile_l1"] = (per_frame * valid).sum() / valid.sum().clamp(min=1.0)
++                loss_dict["loss"] = loss_dict["loss"] + self.wam_tactile_loss_weight * loss_dict["tactile_l1"]
+             return loss_dict
+         else:  # inference time
+-            a_hat, _, (_, _) = self.model(qpos, cam_image, tac_image, env_state)  # no action, sample from prior
++            a_hat, _, (_, _), _ = self.model(qpos, cam_image, tac_image, env_state)  # no action, sample from prior
+             return a_hat
+ 
++    def update_wam_ema(self):
++        """After every optimizer step: move the tactile target encoder towards the fine-tuned one."""
++        self.model.update_wam_ema(self.wam_tactile_ema_decay)
++
+     def configure_optimizers(self):
+         return self.optimizer
+ 
+diff --git a/policy/ACT/deploy_policy.py b/policy/ACT/deploy_policy.py
+index d1459c9..e4450d0 100755
+--- a/policy/ACT/deploy_policy.py
++++ b/policy/ACT/deploy_policy.py
+@@ -53,6 +53,9 @@ class Policy(BasePolicy):
+             "num_epochs": 1
+         })
+         
++        # Cameras the checkpoint was trained on: the wrist camera is fed whenever the config lists it.
++        self.use_wrist = self.camera_type == 'all' or 'cam_wrist' in train_config.get('camera_names', [])
++
+         # Initialize ACT model (RoboTwin_Config=None for TacArena)
+         self.model = ACT(train_config)
+         print(f"ACT policy loaded from {ckpt_dir}")
+@@ -90,7 +93,7 @@ class Policy(BasePolicy):
+             img = img / 255.0  # Normalize to [0, 1]
+             return img
+ 
+-        if self.camera_type == 'all':
++        if self.use_wrist:
+             cam_high = camera_transform(observation["observation"]["head"]["rgb"])
+             cam_wrist = camera_transform(observation["observation"]["wrist"]["rgb"])
+         else:
+@@ -108,7 +111,7 @@ class Policy(BasePolicy):
+             "tac_right": right_tac,
+             "qpos": qpos.cpu().numpy()
+         }
+-        if self.camera_type == 'all':
++        if self.use_wrist:
+             ret["cam_wrist"] = cam_wrist
+         return ret
+ 
+diff --git a/policy/ACT/detr/models/detr_vae.py b/policy/ACT/detr/models/detr_vae.py
+index 941f28b..4712de8 100755
+--- a/policy/ACT/detr/models/detr_vae.py
++++ b/policy/ACT/detr/models/detr_vae.py
+@@ -2,6 +2,8 @@
+ """
+ DETR model and criterion classes.
+ """
++import copy
++
+ import torch
+ from torch import nn
+ from torch.autograd import Variable
+@@ -36,7 +38,8 @@ def get_sinusoid_encoding_table(n_position, d_hid):
+ class DETRVAE(nn.Module):
+     """ This is the DETR module that performs object detection """
+ 
+-    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, tactile_names):
++    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, tactile_names,
++                 wam_tactile_offsets=None):
+         """ Initializes the model.
+         Parameters:
+             backbones: torch module of the backbone to be used. See backbone.py
+@@ -55,7 +58,11 @@ class DETRVAE(nn.Module):
+         hidden_dim = transformer.d_model
+         self.action_head = nn.Linear(hidden_dim, state_dim)
+         self.is_pad_head = nn.Linear(hidden_dim, 1)
+-        self.query_embed = nn.Embedding(num_queries, hidden_dim)
++        # World action model: one extra decoder query per (future tactile frame, stream). The decoder's
++        # self-attention is bidirectional, so the action queries attend to the predicted future touch.
++        self.wam_tactile_offsets = list(wam_tactile_offsets or [])
++        self.num_wam_queries = len(self.wam_tactile_offsets) * len(tactile_names)
++        self.query_embed = nn.Embedding(num_queries + self.num_wam_queries, hidden_dim)
+         if backbones is not None:
+             self.vision_input_proj =nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
+             self.tactile_input_proj =nn.Conv2d(backbones[1].num_channels, hidden_dim, kernel_size=1)
+@@ -68,6 +75,18 @@ class DETRVAE(nn.Module):
+             self.pos = torch.nn.Embedding(2, hidden_dim)
+             self.backbones = None
+ 
++        self.wam_tactile_target = None
++        if self.num_wam_queries:
++            tactile = backbones[1]
++            if tactile.tactile_type != 'feat':
++                raise NotImplementedError("wam_tactile_offsets needs tactile_type 'feat' (one latent per image)")
++            self.wam_tactile_head = nn.Linear(hidden_dim, tactile.num_channels)
++            # Targets: an EMA copy of the fine-tuned tactile backbone (a target encoder trained by its
++            # own prediction loss could collapse to a constant). Updated by update_wam_ema().
++            self.wam_tactile_target = copy.deepcopy(tactile.backbone)
++            for p in self.wam_tactile_target.parameters():
++                p.requires_grad = False
++
+         # encoder extra parameters
+         self.latent_dim = 32  # final size of latent z # TODO tune
+         self.cls_embed = nn.Embedding(1, hidden_dim)  # extra cls token embedding
+@@ -151,9 +170,33 @@ class DETRVAE(nn.Module):
+             env_state = self.input_proj_env_state(env_state)
+             transformer_input = torch.cat([qpos, env_state], axis=1)  # seq length = 2
+             hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
+-        a_hat = self.action_head(hs)
+-        is_pad_hat = self.is_pad_head(hs)
+-        return a_hat, is_pad_hat, [mu, logvar]
++        a_hat = self.action_head(hs[:, :self.num_queries])
++        is_pad_hat = self.is_pad_head(hs[:, :self.num_queries])
++        tac_hat = None
++        if self.num_wam_queries:
++            # (bs, future frames, streams, latent dim)
++            tac_hat = self.wam_tactile_head(hs[:, self.num_queries:]).view(
++                bs, len(self.wam_tactile_offsets), len(self.tactile_names), -1)
++        return a_hat, is_pad_hat, [mu, logvar], tac_hat
++
++    @torch.no_grad()
++    def wam_tactile_targets(self, tac_future):
++        """Future tactile images (bs, frames, streams, 3, H, W) -> layer-normalized EMA latents."""
++        self.wam_tactile_target.eval()
++        bs, frames, streams = tac_future.shape[:3]
++        latents = self.wam_tactile_target(tac_future.flatten(0, 2))  # (bs*frames*streams, latent dim)
++        latents = latents.view(bs, frames, streams, -1)
++        return nn.functional.layer_norm(latents, latents.shape[-1:])
++
++    @torch.no_grad()
++    def update_wam_ema(self, decay):
++        if self.wam_tactile_target is None:
++            return
++        online = self.backbones[1].backbone
++        for p_t, p_o in zip(self.wam_tactile_target.parameters(), online.parameters(), strict=True):
++            p_t.lerp_(p_o.detach(), 1.0 - decay)
++        for b_t, b_o in zip(self.wam_tactile_target.buffers(), online.buffers(), strict=True):
++            b_t.copy_(b_o)
+ 
+ 
+ class CNNMLP(nn.Module):
+@@ -239,6 +282,17 @@ def build_encoder(args):
+     return encoder
+ 
+ 
++def wam_tactile_offsets(args):
++    """Dataset frame offsets of the predicted tactile frames, [] without the world action model."""
++    if not getattr(args, 'wam_enabled', False):
++        return []
++    offsets = getattr(args, 'wam_tactile_future_offsets', None)
++    if offsets is None:
++        stride = getattr(args, 'wam_tactile_future_stride', 5)
++        offsets = [stride * (i + 1) for i in range(getattr(args, 'wam_tactile_future_steps', 6))]
++    return sorted(offsets)
++
++
+ def build(args):
+     state_dim = args.state_dim  # TacArena: read from args
+ 
+@@ -263,6 +317,7 @@ def build(args):
+         num_queries=args.chunk_size,  #gyh
+         camera_names=args.camera_names,
+         tactile_names=args.tactile_names,
++        wam_tactile_offsets=wam_tactile_offsets(args),
+     )
+ 
+     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
